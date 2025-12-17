@@ -20,6 +20,14 @@
 Stepper stepper(STEPS, 8, 9);
 #define motorInterfaceType 1
 
+// ===== Complementary filter =====
+float pitch = 0.0;
+float pitch_acc = 0.0;
+
+unsigned long lastIMUTime = 0;
+const float alpha = 0.98;   // filter weight
+
+
 int left, right, middle;
 
 AK09918_err_type_t err;
@@ -29,7 +37,7 @@ ICM20600 icm20600(true);
 int16_t acc_x, acc_y, acc_z;
 int32_t offset_x, offset_y, offset_z;
 int32_t gyr_x, gyr_y, gyr_z;
-double roll, pitch;
+double roll;
 // Find the magnetic declination at your location
 // http://www.magnetic-declination.com/
 double declination_lisbon = -1.1;
@@ -49,7 +57,7 @@ void setup() {
     pinMode(sw1Pin, INPUT);
     pinMode(sw2Pin, INPUT);
 
-
+    
     left = 0;
     right = 0;
 
@@ -102,6 +110,9 @@ void setup() {
         err = ak09918.isDataReady();
     }
 
+    lastIMUTime = millis();
+
+
     Serial.println("Start figure-8 calibration after 2 seconds.");
     delay(2000);
     calibrate(10000, &offset_x, &offset_y, &offset_z);
@@ -123,13 +134,29 @@ void loop() {
     y = y - offset_y;
     z = z - offset_z;
 
-    if (acc_x >= 900){
-        Serial.println("mooving forward");
-        // go down until the switch is reached
-        // go down until the switch is reached
-        moveMotor1( -10, sw1Pin );
-        right +=10;
+    // ===== Time step =====
+    unsigned long now = millis();
+    float dt = (now - lastIMUTime) / 1000.0;
+    lastIMUTime = now;
+
+    // ===== Accelerometer angle (pitch) =====
+    pitch_acc = atan2((float)acc_x, (float)acc_z) * 180.0 / PI;
+
+    // ===== Gyro rate (deg/s) =====
+    // ICM20600 gyro is usually in LSB → check your lib scaling
+    float gyro_y_dps = gyr_y / 131.0;  // typical for ±250 dps
+
+    // ===== Complementary filter =====
+    pitch = alpha * (pitch + gyro_y_dps * dt) + (1 - alpha) * pitch_acc;
+
+
+    if (pitch > 2.0) {
+      moveMotor1(-5, sw1Pin);
     }
+    else if (pitch < -2.0) {
+      moveMotor1(5, sw2Pin);
+    }
+
 
     if ((millis() - lastDebounceTime) > debounceDelay) {
 
@@ -156,6 +183,9 @@ void loop() {
       Serial.print(",  ");
       Serial.print(z);
       Serial.println(" uT");
+
+      Serial.print(pitch);
+      Serial.println();
 
       lastDebounceTime = millis();
     }
@@ -253,3 +283,11 @@ void moveMotor1(int steps, int safetyPin1) {
     }
   }
 }
+
+/*
+int controller (int16_t acc_x,int16_t acc_y, int16_t acc_z, int32_t gyr_x, int32_t gyr_y, int32_t gyr_z){
+
+  return steps;
+}
+*/
+
